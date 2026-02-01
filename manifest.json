@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Instant Giveaways",
+  "version": "1.0",
+  "description": "Partecipa automaticamente ai giveaway di Instant Gaming!",
+  "icons": {
+    "256" : "icon.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.instant-gaming.com/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instant-gaming.com/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {}
+}
