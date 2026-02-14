@@ -95,31 +95,22 @@ function processNextGiveaway() {
     });
 }
 
-// Funzione principale iniettata nella pagina
+// Funzione iniettata nella pagina
 async function processInteraction(selector) {
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+    // 0. CONTROLLO PER GIVEAWAY TERMINATO
+    if (document.querySelector("span.giveaway-over")) {
+        console.log("Giveaway terminato (rilevato span.giveaway-over). Passo al prossimo.");
+        return;
+    }
+
     // 1. CLICCA PARTECIPA
     const btn = document.querySelector(selector);
-    let clickSuccessful = false;
 
     if (btn) {
         console.log("Bottone trovato, clicco...");
         btn.click();
-        clickSuccessful = true;
-    } else {
-        const allButtons = document.querySelectorAll('button, a.button');
-        for (let b of allButtons) {
-            if (b.innerText.toLowerCase().includes("participer")) {
-                b.click();
-                clickSuccessful = true;
-                break;
-            }
-        }
-    }
-
-    if (!clickSuccessful) {
-        console.log("Nessun bottone di partecipazione trovato. Controllo se ho già partecipato...");
     }
 
     // 2. ATTENDI COMPARSA DI <div class="participated">
@@ -132,13 +123,13 @@ async function processInteraction(selector) {
     while (attempts < maxAttempts) {
         participatedDiv = document.querySelector("div.participated");
         if (participatedDiv) break;
-        
+
         await wait(500);
         attempts++;
     }
 
     if (!participatedDiv) {
-        console.warn("Timeout: Il div 'participated' non è apparso. Passo al prossimo.");
+        console.warn("Timeout: Il div 'participated' non è apparso (e non sembra terminato).");
         return; 
     }
 
@@ -165,17 +156,11 @@ async function processInteraction(selector) {
             
             if (pending.length === 0) {
                 allSuccess = true;
-                console.log("Tutti i reward completati (success)!");
+                console.log("Tutti i reward completati!");
             } else {
                 await wait(500);
                 rewardAttempts++;
             }
         }
-
-        if (!allSuccess) {
-            console.warn("Timeout: Alcuni reward non si sono completati in tempo.");
-        }
-    } else {
-        console.log("Nessun bottone reward trovato nel div.");
     }
 }
