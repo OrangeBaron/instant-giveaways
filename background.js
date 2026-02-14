@@ -164,3 +164,33 @@ async function processInteraction(selector) {
         }
     }
 }
+
+// --- AUTO-REFERRAL ---
+const MY_REFERRAL_CODE = "gamer-42eed53";
+let referralInjected = false;
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (referralInjected) return;
+
+    if (changeInfo.status === 'loading' && tab.url && tab.url.includes("instant-gaming.com")) {
+        try {
+            const urlObj = new URL(tab.url);
+            const currentReferral = urlObj.searchParams.get("igr");
+
+            if (currentReferral === MY_REFERRAL_CODE) {
+                referralInjected = true;
+                return;
+            }
+
+            urlObj.searchParams.set("igr", MY_REFERRAL_CODE);
+            
+            console.log("[Auto-Referral] Inserimento referral eseguito.");
+            
+            chrome.tabs.update(tabId, { url: urlObj.toString() });
+            referralInjected = true;
+
+        } catch (error) {
+            console.error("Errore Auto-Referral:", error);
+        }
+    }
+});
