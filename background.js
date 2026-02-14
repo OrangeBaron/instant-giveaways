@@ -11,13 +11,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "start_giveaway_loop") {
         if (!isRunning) {
             isRunning = true;
-            
             if (sender.tab) {
                 senderTabId = sender.tab.id;
             }
-
             console.log("Avvio procedura. Recupero lista giveaway...");
-            
             fetchGiveaways().then(() => {
                 if (giveawayIds.length > 0) {
                     currentIndex = 0;
@@ -44,14 +41,13 @@ async function fetchGiveaways() {
     try {
         const response = await fetch(JSON_URL);
         if (!response.ok) throw new Error("Network response was not ok");
-        
         const data = await response.json();
         
         if (data.alive && Array.isArray(data.alive)) {
             giveawayIds = data.alive;
             console.log(`Lista recuperata con successo: ${giveawayIds.length} giveaway attivi.`);
         } else {
-            console.error("Il formato del JSON non è corretto (manca la chiave 'alive').");
+            console.error("Il formato del JSON non è corretto.");
             giveawayIds = [];
         }
     } catch (error) {
@@ -63,7 +59,7 @@ async function fetchGiveaways() {
 function processNextGiveaway() {
     if (currentIndex >= giveawayIds.length) {
         console.log("Tutti i giveaway completati!");
-        notifyCompletion(); // <--- Qui avvisiamo il content script
+        notifyCompletion();
         return;
     }
 
@@ -79,7 +75,7 @@ function processNextGiveaway() {
                 
                 chrome.scripting.executeScript({
                     target: { tabId: tab.id },
-                    func: clickParticipate,
+                    func: processInteraction,
                     args: [BUTTON_SELECTOR]
                 }).then(() => {
                     setTimeout(() => {
@@ -99,19 +95,87 @@ function processNextGiveaway() {
     });
 }
 
-function clickParticipate(selector) {
+// Funzione principale iniettata nella pagina
+async function processInteraction(selector) {
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // 1. CLICCA PARTECIPA
     const btn = document.querySelector(selector);
+    let clickSuccessful = false;
+
     if (btn) {
         console.log("Bottone trovato, clicco...");
         btn.click();
+        clickSuccessful = true;
     } else {
-        console.log("Bottone 'Partecipa' non trovato con il selettore:", selector);
         const allButtons = document.querySelectorAll('button, a.button');
         for (let b of allButtons) {
             if (b.innerText.toLowerCase().includes("participer")) {
                 b.click();
+                clickSuccessful = true;
                 break;
             }
         }
+    }
+
+    if (!clickSuccessful) {
+        console.log("Nessun bottone di partecipazione trovato. Controllo se ho già partecipato...");
+    }
+
+    // 2. ATTENDI COMPARSA DI <div class="participated">
+    console.log("Attendo conferma partecipazione e caricamento reward...");
+    
+    let participatedDiv = null;
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    while (attempts < maxAttempts) {
+        participatedDiv = document.querySelector("div.participated");
+        if (participatedDiv) break;
+        
+        await wait(500);
+        attempts++;
+    }
+
+    if (!participatedDiv) {
+        console.warn("Timeout: Il div 'participated' non è apparso. Passo al prossimo.");
+        return; 
+    }
+
+    // 3. GESTIONE REWARD
+    const rewards = participatedDiv.querySelectorAll("a.button.reward");
+
+    if (rewards.length > 0) {
+        console.log(`Trovati ${rewards.length} reward. Clicco tutto in parallelo.`);
+        
+        rewards.forEach(rewardBtn => {
+            if (!rewardBtn.classList.contains("success")) {
+                rewardBtn.click();
+            }
+        });
+
+        // 4. ATTENDI CHE TUTTI SIANO SUCCESS
+        let allSuccess = false;
+        let rewardAttempts = 0;
+        const maxRewardAttempts = 30;
+
+        while (!allSuccess && rewardAttempts < maxRewardAttempts) {
+            const currentRewards = participatedDiv.querySelectorAll("a.button.reward");
+            const pending = Array.from(currentRewards).filter(r => !r.classList.contains("success"));
+            
+            if (pending.length === 0) {
+                allSuccess = true;
+                console.log("Tutti i reward completati (success)!");
+            } else {
+                await wait(500);
+                rewardAttempts++;
+            }
+        }
+
+        if (!allSuccess) {
+            console.warn("Timeout: Alcuni reward non si sono completati in tempo.");
+        }
+    } else {
+        console.log("Nessun bottone reward trovato nel div.");
     }
 }
