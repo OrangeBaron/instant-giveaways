@@ -5,6 +5,12 @@ let currentIndex = 0;
 let isRunning = false;
 let senderTabId = null;
 
+// --- VARIABILI PER LA GESTIONE DELLA CODA ---
+const MAX_CONCURRENT_TABS = 10;
+const DELAY_BETWEEN_OPENS_MS = 1000;
+let activeTabsCount = 0;
+let isSpawning = false;
+
 const BUTTON_SELECTOR = "#giveaway-app > div.participation-state > div > button"; 
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -14,11 +20,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (sender.tab) {
                 senderTabId = sender.tab.id;
             }
-            console.log("Avvio procedura. Recupero lista giveaway...");
+            console.log("Avvio procedura in parallelo. Recupero lista giveaway...");
             fetchGiveaways().then(() => {
                 if (giveawayIds.length > 0) {
                     currentIndex = 0;
-                    processNextGiveaway();
+                    activeTabsCount = 0;
+                    manageQueue();
                 } else {
                     console.log("Nessun giveaway trovato o errore nel recupero.");
                     resetState("Errore o nessun giveaway");
@@ -35,6 +42,13 @@ function notifyCompletion() {
     }
     isRunning = false;
     senderTabId = null;
+    activeTabsCount = 0;
+    currentIndex = 0;
+}
+
+function resetState(reason) {
+    console.warn("Procedura fermata:", reason);
+    notifyCompletion();
 }
 
 async function fetchGiveaways() {
@@ -56,19 +70,36 @@ async function fetchGiveaways() {
     }
 }
 
-function processNextGiveaway() {
-    if (currentIndex >= giveawayIds.length) {
-        console.log("Tutti i giveaway completati!");
-        notifyCompletion();
-        return;
+// Funzione che gestisce le aperture rispettando il limite massimo e il delay
+async function manageQueue() {
+    // Evita che più chiamate avviino loop di aperture simultanei sovrapponendosi
+    if (isSpawning) return;
+    isSpawning = true;
+
+    while (activeTabsCount < MAX_CONCURRENT_TABS && currentIndex < giveawayIds.length) {
+        const id = giveawayIds[currentIndex];
+        currentIndex++;
+        activeTabsCount++;
+        
+        spawnTab(id);
+        
+        // Attendi 1 secondo prima di aprire la scheda successiva
+        await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_OPENS_MS));
     }
 
-    const id = giveawayIds[currentIndex];
+    isSpawning = false;
+    
+    checkCompletion();
+}
+
+// Funzione isolata per la singola tab
+function spawnTab(id) {
     const url = `https://www.instant-gaming.com/fr/giveaway/${id}?igr=gamer-42eed53`;
 
-    console.log(`Processando (${currentIndex + 1}/${giveawayIds.length}): ${id}`);
+    console.log(`Apro tab per (${currentIndex}/${giveawayIds.length}): ${id}`);
 
-    chrome.tabs.create({ url: url, active: true }, (tab) => {
+    // active: false permette alla tab di aprirsi in background senza darti fastidio
+    chrome.tabs.create({ url: url, active: false }, (tab) => {
         const listener = (tabId, changeInfo) => {
             if (tabId === tab.id && changeInfo.status === 'complete') {
                 chrome.tabs.onUpdated.removeListener(listener);
@@ -79,15 +110,11 @@ function processNextGiveaway() {
                     args: [BUTTON_SELECTOR]
                 }).then(() => {
                     setTimeout(() => {
-                        chrome.tabs.remove(tab.id);
-                        currentIndex++;
-                        processNextGiveaway();
+                        closeTabAndNext(tab.id);
                     }, 1000);
                 }).catch(err => {
                     console.error("Errore script:", err);
-                    chrome.tabs.remove(tab.id);
-                    currentIndex++;
-                    processNextGiveaway();
+                    closeTabAndNext(tab.id);
                 });
             }
         };
@@ -95,27 +122,42 @@ function processNextGiveaway() {
     });
 }
 
+function closeTabAndNext(tabId) {
+    chrome.tabs.remove(tabId, () => {
+        if (chrome.runtime.lastError) {
+            console.warn("Tab già chiusa o inesistente:", chrome.runtime.lastError.message);
+        }
+        activeTabsCount--;
+        
+        // Avvia la prossima tab se c'è spazio e ci sono ID rimanenti
+        manageQueue(); 
+        
+        // Controlla se abbiamo finito del tutto
+        checkCompletion(); 
+    });
+}
+
+function checkCompletion() {
+    if (currentIndex >= giveawayIds.length && activeTabsCount === 0) {
+        console.log("Tutti i giveaway completati!");
+        notifyCompletion();
+    }
+}
+
 // Funzione iniettata nella pagina
 async function processInteraction(selector) {
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // 0. CONTROLLO PER GIVEAWAY TERMINATO
     if (document.querySelector("span.giveaway-over")) {
-        console.log("Giveaway terminato (rilevato span.giveaway-over). Passo al prossimo.");
+        console.log("Giveaway terminato. Passo al prossimo.");
         return;
     }
 
-    // 1. CLICCA PARTECIPA
     const btn = document.querySelector(selector);
-
     if (btn) {
-        console.log("Bottone trovato, clicco...");
         btn.click();
     }
 
-    // 2. ATTENDI COMPARSA DI <div class="participated">
-    console.log("Attendo conferma partecipazione e caricamento reward...");
-    
     let participatedDiv = null;
     let attempts = 0;
     const maxAttempts = 20;
@@ -123,29 +165,21 @@ async function processInteraction(selector) {
     while (attempts < maxAttempts) {
         participatedDiv = document.querySelector("div.participated");
         if (participatedDiv) break;
-
-        await wait(500);
+        await wait(100);
         attempts++;
     }
 
-    if (!participatedDiv) {
-        console.warn("Timeout: Il div 'participated' non è apparso (e non sembra terminato).");
-        return; 
-    }
+    if (!participatedDiv) return; 
 
-    // 3. GESTIONE REWARD
     const rewards = participatedDiv.querySelectorAll("a.button.reward");
 
     if (rewards.length > 0) {
-        console.log(`Trovati ${rewards.length} reward. Clicco tutto in parallelo.`);
-        
         rewards.forEach(rewardBtn => {
             if (!rewardBtn.classList.contains("success")) {
                 rewardBtn.click();
             }
         });
 
-        // 4. ATTENDI CHE TUTTI SIANO SUCCESS
         let allSuccess = false;
         let rewardAttempts = 0;
         const maxRewardAttempts = 30;
@@ -156,21 +190,21 @@ async function processInteraction(selector) {
             
             if (pending.length === 0) {
                 allSuccess = true;
-                console.log("Tutti i reward completati!");
             } else {
-                await wait(500);
+                await wait(100);
                 rewardAttempts++;
             }
         }
     }
 }
 
-// --- AUTO-REFERRAL ---
+// --- AUTO-REFERRAL (Gestito con un Set per supportare il parallelismo) ---
 const MY_REFERRAL_CODE = "gamer-42eed53";
-let referralInjected = false;
+const injectedTabs = new Set(); 
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (referralInjected) return;
+    // Se la tab è già stata processata, salta
+    if (injectedTabs.has(tabId)) return;
 
     if (changeInfo.status === 'loading' && tab.url && tab.url.includes("instant-gaming.com")) {
         try {
@@ -178,19 +212,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             const currentReferral = urlObj.searchParams.get("igr");
 
             if (currentReferral === MY_REFERRAL_CODE) {
-                referralInjected = true;
+                injectedTabs.add(tabId);
                 return;
             }
 
             urlObj.searchParams.set("igr", MY_REFERRAL_CODE);
-            
-            console.log("[Auto-Referral] Inserimento referral eseguito.");
-            
             chrome.tabs.update(tabId, { url: urlObj.toString() });
-            referralInjected = true;
+            injectedTabs.add(tabId);
 
         } catch (error) {
             console.error("Errore Auto-Referral:", error);
         }
     }
+});
+
+// Pulisci il Set quando le tab vengono chiuse per evitare memory leaks
+chrome.tabs.onRemoved.addListener((tabId) => {
+    injectedTabs.delete(tabId);
 });
