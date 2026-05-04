@@ -18,6 +18,13 @@ if (!window.location.href.includes("/giveaway/")) {
     });
 
     btn.addEventListener("click", () => {
+        const isLoggedOut = document.querySelector(".user .avatar-loggued-out");
+        
+        if (isLoggedOut) {
+            alert("Devi aver effettuato il login su Instant Gaming per poter partecipare ai giveaway!");
+            return;
+        }
+
         if (confirm("Vuoi iniziare la procedura automatica? Verranno aperte e chiuse molte schede.")) {
             chrome.runtime.sendMessage({ action: "start_giveaway_loop" });
             
