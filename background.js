@@ -160,7 +160,7 @@ async function processInteraction(selector) {
 
     let participatedDiv = null;
     let attempts = 0;
-    const maxAttempts = 20;
+    const maxAttempts = 600;
 
     while (attempts < maxAttempts) {
         participatedDiv = document.querySelector("div.participated");
@@ -182,7 +182,7 @@ async function processInteraction(selector) {
 
         let allSuccess = false;
         let rewardAttempts = 0;
-        const maxRewardAttempts = 30;
+        const maxRewardAttempts = 600;
 
         while (!allSuccess && rewardAttempts < maxRewardAttempts) {
             const currentRewards = participatedDiv.querySelectorAll("a.button.reward");
